@@ -41,40 +41,32 @@ jobs:
     # - name: Run Tests
     #   run: npm run test # 假设有 test 脚本
 
-    # Chatbox 项目似乎没有单独的 `build` 脚本，打包命令可能包含了构建步骤
-    # 如果有明确的构建步骤，例如 `npm run build`，应该在这里添加
-    # - name: Build application (if applicable)
-    #   run: npm run build # 例如：tsc (TypeScript compile) or webpack/vite build
-
     - name: Package application for ${{ matrix.os }}
-      # 注意：npm run package 通常为当前平台打包
-      # npm run package:all 可能会尝试所有平台，但在单一 OS runner 上可能不完整或失败
-      # 这里我们假设 `npm run package` 会智能地为当前 runner OS 打包
-      run: npm run package
+      # 为 Windows 平台尝试使用管道输入 'Y' 来回应可能的交互提示
+      # 对于其他平台，正常运行
+      run: |
+        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          echo "Y" | npm run package
+        else
+          npm run package
+        fi
+      shell: bash # 使用 bash 以便跨平台地使用 if [[ ... ]] 语法
+                  # 在 Windows runner 上，bash (Git Bash) 通常是可用的
       env:
-        # 如果打包过程需要某些环境变量，可以在这里设置
-        # 例如，Electron Builder 可能需要 GH_TOKEN 来发布，但这里我们只是打包
-        # CSC_LINK: ${{ secrets.CSC_LINK }} # 示例：代码签名证书 (如果需要)
-        # CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }} # 示例：证书密码 (如果需要)
         DEBUG_PROD: "*" # Chatbox 似乎用这个来显示更多日志
 
     - name: List packaged files (for debugging)
-      # 根据 Chatbox 的打包输出调整路径
-      # 通常在 dist, release, out, or build 文件夹下
       run: |
         echo "Listing files in common output directories:"
         ls -R dist || echo "dist directory not found"
         ls -R release || echo "release directory not found"
         ls -R out || echo "out directory not found"
-      shell: bash # 确保跨平台 ls 的行为 (或者使用平台特定命令)
+      shell: bash
 
     - name: Upload Artifact (Installer)
       uses: actions/upload-artifact@v4
       with:
         name: chatbox-installer-${{ matrix.os }}
-        # 修改路径以匹配 Chatbox 打包后安装文件的实际位置和名称模式
-        # 示例路径，具体需要查看 Chatbox 打包后的输出
-        # 通常会是 .exe, .dmg, .AppImage, .deb, .rpm 等
         path: |
           dist/**/*.exe
           dist/**/*.dmg
@@ -91,4 +83,4 @@ jobs:
           out/**/*.AppImage
           out/**/*.deb
           out/**/*.rpm
-        if-no-files-found: warn # 如果没有找到文件则发出警告而不是失败
+        if-no-files-found: warn
