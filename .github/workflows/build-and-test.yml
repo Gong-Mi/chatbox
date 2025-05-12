@@ -1,0 +1,94 @@
+# .github/workflows/build-and-test.yml
+
+name: Chatbox Build and Package
+
+on:
+  push:
+    branches:
+      - main # 当推送到 main 分支时触发
+      - 'feature/**' # 当推送到 feature/* 分支时触发，例如 feature/add-new-gemini-models
+  pull_request:
+    branches:
+      - main # 当有 PR 指向 main 分支时触发
+
+jobs:
+  build-and-package:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest] # 为不同平台构建
+        node-version: [18.x] # 指定 Node.js 版本，根据项目要求调整
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm' # 缓存 npm 依赖
+
+    - name: Install dependencies
+      run: npm install
+
+    # 可选：如果项目中有 Linting 配置
+    # - name: Run Lint
+    #   run: npm run lint # 假设有 lint 脚本
+
+    # 可选：如果项目中有单元测试或集成测试 (不涉及实际 API 调用的)
+    # - name: Run Tests
+    #   run: npm run test # 假设有 test 脚本
+
+    # Chatbox 项目似乎没有单独的 `build` 脚本，打包命令可能包含了构建步骤
+    # 如果有明确的构建步骤，例如 `npm run build`，应该在这里添加
+    # - name: Build application (if applicable)
+    #   run: npm run build # 例如：tsc (TypeScript compile) or webpack/vite build
+
+    - name: Package application for ${{ matrix.os }}
+      # 注意：npm run package 通常为当前平台打包
+      # npm run package:all 可能会尝试所有平台，但在单一 OS runner 上可能不完整或失败
+      # 这里我们假设 `npm run package` 会智能地为当前 runner OS 打包
+      run: npm run package
+      env:
+        # 如果打包过程需要某些环境变量，可以在这里设置
+        # 例如，Electron Builder 可能需要 GH_TOKEN 来发布，但这里我们只是打包
+        # CSC_LINK: ${{ secrets.CSC_LINK }} # 示例：代码签名证书 (如果需要)
+        # CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }} # 示例：证书密码 (如果需要)
+        DEBUG_PROD: "*" # Chatbox 似乎用这个来显示更多日志
+
+    - name: List packaged files (for debugging)
+      # 根据 Chatbox 的打包输出调整路径
+      # 通常在 dist, release, out, or build 文件夹下
+      run: |
+        echo "Listing files in common output directories:"
+        ls -R dist || echo "dist directory not found"
+        ls -R release || echo "release directory not found"
+        ls -R out || echo "out directory not found"
+      shell: bash # 确保跨平台 ls 的行为 (或者使用平台特定命令)
+
+    - name: Upload Artifact (Installer)
+      uses: actions/upload-artifact@v4
+      with:
+        name: chatbox-installer-${{ matrix.os }}
+        # 修改路径以匹配 Chatbox 打包后安装文件的实际位置和名称模式
+        # 示例路径，具体需要查看 Chatbox 打包后的输出
+        # 通常会是 .exe, .dmg, .AppImage, .deb, .rpm 等
+        path: |
+          dist/**/*.exe
+          dist/**/*.dmg
+          dist/**/*.AppImage
+          dist/**/*.deb
+          dist/**/*.rpm
+          release/**/*.exe
+          release/**/*.dmg
+          release/**/*.AppImage
+          release/**/*.deb
+          release/**/*.rpm
+          out/**/*.exe
+          out/**/*.dmg
+          out/**/*.AppImage
+          out/**/*.deb
+          out/**/*.rpm
+        if-no-files-found: warn # 如果没有找到文件则发出警告而不是失败
