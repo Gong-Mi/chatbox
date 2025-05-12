@@ -1,0 +1,57 @@
+name: Generate or Update pnpm-lock.yaml
+
+on:
+  push:
+    branches:
+      - main # 或者你希望监控的分支，通常是你 Fork 后的默认分支
+    paths-ignore: # 避免因为 lockfile 本身的提交而无限循环
+      - 'pnpm-lock.yaml'
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  generate-lockfile:
+    runs-on: ubuntu-latest
+    # 给予 workflow 写权限，以便它可以 push 回仓库
+    permissions:
+      contents: write # 非常重要！
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # 如果你希望提交到与触发分支不同的分支，可以在这里指定
+          # ref: ${{ github.head_ref || github.ref_name }}
+          # 确保获取了完整的历史记录，以便 commit 和 push
+          fetch-depth: 0 # 获取所有历史记录，以便 diff 和 commit
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x # 确认与项目兼容
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9 # 确认与项目 packageManager 字段一致
+
+      - name: Install dependencies and generate lockfile
+        run: pnpm install # 不使用 --frozen-lockfile，以便生成或更新 lockfile
+                         # pnpm install 会自动创建/更新 pnpm-lock.yaml
+
+      - name: Commit and push pnpm-lock.yaml
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: Generate/update pnpm-lock.yaml [skip ci]"
+          # [skip ci] 通常用于防止这个提交再次触发 CI (如果你的 CI 触发条件比较宽泛)
+          # 检查你的其他 workflow 是否会因为这个 commit 而被触发，并相应调整
+
+          file_pattern: pnpm-lock.yaml # 只提交 pnpm-lock.yaml 的变动
+          # 可选：配置 commit 作者和邮箱
+          # commit_user_name: GitHub Actions Bot
+          # commit_user_email: actions@github.com
+          # 可选：指定要推送的分支，默认为当前检出的分支
+          # push_options: '--force' # 通常不需要，除非遇到冲突且你知道你在做什么
+          # branch: ${{ github.head_ref || github.ref_name }} # 推送到当前分支
+
+          # 如果你的仓库需要 Pull Request 而不是直接 push 到 main，这里的配置会更复杂
+          # 对于你自己的 Fork，直接 push 通常是可以的
