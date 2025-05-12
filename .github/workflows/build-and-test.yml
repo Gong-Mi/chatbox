@@ -1,20 +1,21 @@
-name: Build Android APK
+name: Build Android APK for Download
 
 on:
+  workflow_dispatch: # 允许你从 GitHub UI 手动触发这个 workflow
   push:
-    branches: [ main ] # 或者特定用于发布的tag, e.g., v*.*.*
-    paths: # 仅在相关文件变动时触发，减少不必要的构建
+    branches:
+      - main # 或者你克隆和修改的分支
+    paths: # 仅在相关文件变动时触发 (可选，但能节省资源)
       - 'src/**'
       - 'android/**'
       - 'capacitor.config.json'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - '.github/workflows/build-android-apk.yml'
-  workflow_dispatch: # 允许手动触发
 
 jobs:
   build-apk:
-    runs-on: ubuntu-latest # Linux runner 通常是 Android 构建的首选
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -22,12 +23,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.x # 与你的项目匹配
+          node-version: 20.x # 确认与项目兼容
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
         with:
-          version: 9
+          version: 9 # 确认与项目 packageManager 字段一致
 
       - name: Get pnpm store directory
         id: pnpm-cache
@@ -44,25 +45,22 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Install pnpm dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile # 确保 pnpm-lock.yaml 已提交到你的仓库
 
       # ------------------- Android Specific Setup -------------------
       - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin' # 或者 'zulu', 'adopt'
-          java-version: '17'    # 根据你的项目需求选择 (Android Studio Electric Eel+ 推荐 17)
+          distribution: 'temurin'
+          java-version: '17' # 根据项目 Android 构建需求
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3 # 一个社区维护的 Action
-        # 你可能需要更详细地配置这个 action，或者手动安装 SDK
+        uses: android-actions/setup-android@v3
+        # 如果需要特定版本，可以取消注释并配置
         # with:
-        #   api-level: 33 # 示例
-        #   build-tools: "33.0.2" # 示例
-        #   ndk: "25.2.9519653" # 如果需要 NDK
-        #   cmake: "3.22.1"   # 如果需要 CMake
+        #   api-level: 33
+        #   build-tools: "33.0.2"
 
-      # 缓存 Gradle 依赖
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
@@ -74,56 +72,27 @@ jobs:
             ${{ runner.os }}-gradle-
 
       # ------------------- Build Web Assets for Android -------------------
-      - name: Build Renderer for Android
-        run: pnpm run mobile:sync:android # 这会执行 clean, build:renderer, 和 cap sync android
+      - name: Build Renderer for Android and Sync
+        run: pnpm run mobile:sync:android # 这个脚本应包含 web 构建和 capacitor sync
         env:
-          # CHATBOX_BUILD_TARGET 和 CHATBOX_BUILD_PLATFORM 已经在脚本中通过 cross-env 设置
-          # 如果脚本内部没有，可以在这里设置
-          # CHATBOX_BUILD_TARGET: mobile_app
-          # CHATBOX_BUILD_PLATFORM: android
-          NODE_ENV: production # 确保是生产构建
+          NODE_ENV: production
 
       # ------------------- Build APK -------------------
-      # 进入 Android 项目目录并执行 Gradle 命令
       - name: Grant execute permission for gradlew
-        run: chmod +x android/gradlew
-        working-directory: ./android # 确保在 android 目录下
+        run: chmod +x gradlew # gradlew 在 android 目录下
+        working-directory: ./android
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
         working-directory: ./android
-
-      # - name: Build Release APK (需要签名配置)
-      #   if: github.ref_type == 'tag' # 仅在打标签时构建 Release 版本
-      #   run: |
-      #     echo "Keystore base64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}"
-      #     echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > ${{ github.workspace }}/android/app/upload-keystore.jks
-      #     ./gradlew assembleRelease \
-      #       -Pandroid.injected.signing.store.file=${{ github.workspace }}/android/app/upload-keystore.jks \
-      #       -Pandroid.injected.signing.store.password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
-      #       -Pandroid.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }} \
-      #       -Pandroid.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }} \
-      #       --stacktrace
-      #   working-directory: ./android
-      #   env:
-      #     # 确保这些 secrets 已经在 GitHub Secrets 中配置
-      #     ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      #     ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      #     ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      #     ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        # 注意：默认情况下，assembleDebug 生成的 APK 未签名，主要用于测试。
+        # 对于 Release APK，你需要配置签名。但如果你只是自己使用，Debug APK 也可以。
 
       # ------------------- Upload APK Artifact -------------------
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
+        if: success() # 仅在构建成功时上传
         with:
-          name: chatbox-android-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          # retention-days: 7
-
-      # - name: Upload Release APK
-      #   if: github.ref_type == 'tag' && success()
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: chatbox-android-release-apk
-      #     path: android/app/build/outputs/apk/release/app-release.apk
-          # retention-days: 30
+          name: chatbox-android-debug-apk # Artifact 的名称
+          path: android/app/build/outputs/apk/debug/app-debug.apk # APK 文件的路径
+          retention-days: 7 # Artifact 保留天数 (可选, 默认90天)
