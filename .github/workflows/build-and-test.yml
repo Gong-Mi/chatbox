@@ -1,78 +1,129 @@
-# .github/workflows/build-and-test.yml
-
-name: Chatbox Build and Package
+name: Build Android APK
 
 on:
   push:
-    branches:
-      - main
-      - 'feature/**'
-  pull_request:
-    branches:
-      - main
+    branches: [ main ] # 或者特定用于发布的tag, e.g., v*.*.*
+    paths: # 仅在相关文件变动时触发，减少不必要的构建
+      - 'src/**'
+      - 'android/**'
+      - 'capacitor.config.json'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/build-android-apk.yml'
+  workflow_dispatch: # 允许手动触发
 
 jobs:
-  build-and-package:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        node-version: [18.x]
-
-    runs-on: ${{ matrix.os }}
-
+  build-apk:
+    runs-on: ubuntu-latest # Linux runner 通常是 Android 构建的首选
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'npm'
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x # 与你的项目匹配
 
-    - name: Install dependencies
-      run: npm install
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
 
-    - name: Package application for ${{ matrix.os }}
-      run: |
-        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          echo "Y" | npm run package
-        else
-          npm run package
-        fi
-      shell: bash
-      env:
-        DEBUG_PROD: "*"
-        # 为 UPDATE_CHANNEL 设置一个默认值，以便 electron-builder 不会报错
-        # "ci-build" 或 "latest" 或 "alpha" 都是可以接受的临时值
-        UPDATE_CHANNEL: "ci-build"
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
 
-    - name: List packaged files (for debugging)
-      run: |
-        echo "Listing files in common output directories:"
-        ls -R dist || echo "dist directory not found"
-        ls -R release || echo "release directory not found"
-        ls -R out || echo "out directory not found"
-      shell: bash
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
 
-    - name: Upload Artifact (Installer)
-      uses: actions/upload-artifact@v4
-      with:
-        name: chatbox-installer-${{ matrix.os }}
-        path: |
-          dist/**/*.exe
-          dist/**/*.dmg
-          dist/**/*.AppImage
-          dist/**/*.deb
-          dist/**/*.rpm
-          release/**/*.exe
-          release/**/*.dmg
-          release/**/*.AppImage
-          release/**/*.deb
-          release/**/*.rpm
-          out/**/*.exe
-          out/**/*.dmg
-          out/**/*.AppImage
-          out/**/*.deb
-          out/**/*.rpm
-        if-no-files-found: warn
+      - name: Install pnpm dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ------------------- Android Specific Setup -------------------
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin' # 或者 'zulu', 'adopt'
+          java-version: '17'    # 根据你的项目需求选择 (Android Studio Electric Eel+ 推荐 17)
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3 # 一个社区维护的 Action
+        # 你可能需要更详细地配置这个 action，或者手动安装 SDK
+        # with:
+        #   api-level: 33 # 示例
+        #   build-tools: "33.0.2" # 示例
+        #   ndk: "25.2.9519653" # 如果需要 NDK
+        #   cmake: "3.22.1"   # 如果需要 CMake
+
+      # 缓存 Gradle 依赖
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      # ------------------- Build Web Assets for Android -------------------
+      - name: Build Renderer for Android
+        run: pnpm run mobile:sync:android # 这会执行 clean, build:renderer, 和 cap sync android
+        env:
+          # CHATBOX_BUILD_TARGET 和 CHATBOX_BUILD_PLATFORM 已经在脚本中通过 cross-env 设置
+          # 如果脚本内部没有，可以在这里设置
+          # CHATBOX_BUILD_TARGET: mobile_app
+          # CHATBOX_BUILD_PLATFORM: android
+          NODE_ENV: production # 确保是生产构建
+
+      # ------------------- Build APK -------------------
+      # 进入 Android 项目目录并执行 Gradle 命令
+      - name: Grant execute permission for gradlew
+        run: chmod +x android/gradlew
+        working-directory: ./android # 确保在 android 目录下
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace
+        working-directory: ./android
+
+      # - name: Build Release APK (需要签名配置)
+      #   if: github.ref_type == 'tag' # 仅在打标签时构建 Release 版本
+      #   run: |
+      #     echo "Keystore base64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}"
+      #     echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > ${{ github.workspace }}/android/app/upload-keystore.jks
+      #     ./gradlew assembleRelease \
+      #       -Pandroid.injected.signing.store.file=${{ github.workspace }}/android/app/upload-keystore.jks \
+      #       -Pandroid.injected.signing.store.password=${{ secrets.ANDROID_KEYSTORE_PASSWORD }} \
+      #       -Pandroid.injected.signing.key.alias=${{ secrets.ANDROID_KEY_ALIAS }} \
+      #       -Pandroid.injected.signing.key.password=${{ secrets.ANDROID_KEY_PASSWORD }} \
+      #       --stacktrace
+      #   working-directory: ./android
+      #   env:
+      #     # 确保这些 secrets 已经在 GitHub Secrets 中配置
+      #     ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      #     ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      #     ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      #     ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      # ------------------- Upload APK Artifact -------------------
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatbox-android-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          # retention-days: 7
+
+      # - name: Upload Release APK
+      #   if: github.ref_type == 'tag' && success()
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: chatbox-android-release-apk
+      #     path: android/app/build/outputs/apk/release/app-release.apk
+          # retention-days: 30
